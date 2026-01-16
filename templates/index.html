@@ -1,0 +1,28 @@
+{% extends "base.html" %} {% block title %}Home Page{% endblock %} {% block
+content %}
+<div class="card w-full mx-auto">
+  <div class="card-body">
+    <h1 class="card-title">Consulta por número de lote</h1>
+    {% with messages = get_flashed_messages() %} {% if messages %} {% for
+    message in messages %}
+    <div class="alert alert-info">{{ message }}</div>
+    {% endfor %} {% endif %} {% endwith %}
+    <form method="POST">
+      {{ form.hidden_tag() }}
+      <div class="mb-3">
+        {{ form.lote.label(class="form-label") }} {{
+        form.lote(class="form-control") }}
+      </div>
+
+      {{ form.submit(class="btn btn-primary") }} {% if form.lote.errors %} {%
+      for error in form.lote.errors %}
+      <div class="alert alert-danger mt-2">{{ error }}</div>
+      {% endfor %} {% endif %}
+    </form>
+  </div>
+</div>
+
+
+
+ {% endblock %}
+</div>

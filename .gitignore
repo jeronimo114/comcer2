@@ -1,0 +1,12 @@
+.DS_Store
+.vscode/
+
+__pycache__/
+*.pyc
+
+.env
+
+downloads/
+
+credentials.json
+desktop_credentials.json

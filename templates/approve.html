@@ -1,0 +1,16 @@
+{% extends "base.html" %} {% block title %}Home Page {% endblock %} {% block
+content %}
+<div class="card w-50 mx-auto">
+  <div class="card-body">
+    <h1 class="card-ttile">{{client}}</h1>
+    <a
+      target="_blank"
+      href="https://docs.google.com/spreadsheets/d/18AMyp1SzQR_3xe7EAH5muotOkNMy7rJV73YVwfExbi8/edit?gid=39025152#gid=39025152"
+      >Revisar</a
+    >
+  </div>
+  <form class="p-2" method="POST">
+    <button type="submit" class="btn btn-success">Aprobar</button>
+  </form>
+</div>
+{% endblock %}
