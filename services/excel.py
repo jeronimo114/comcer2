@@ -57,7 +57,7 @@ class Client:
 
     def fill_info(self, body: dict):
         self.clients = []
-        worksheet = self.spreadsheet.get_worksheet(0)
+        worksheet = self.spreadsheet.worksheet("INFO")
         self.batch = body["batch"]
 
         # Prepare all values in a single update
@@ -161,7 +161,7 @@ class Client:
             self.fill_sheet(client, path)
 
     def fill_despacho(self, body: list, client):
-        worksheet = self.spreadsheet.get_worksheet(1)
+        worksheet = self.spreadsheet.worksheet("despacho")
         self.logger.info("Clearing despacho sheet")
         self.clear_sheet_range(worksheet, 2, 90, "A", "R")
 
@@ -299,9 +299,7 @@ class Client:
         # llegada L4
         # liquidacion L6
         # sacrificio L7
-        worksheet = self.spreadsheet.get_worksheet(
-            2
-        )  # Assuming "LIQUIDACION" is the third worksheet
+        worksheet = self.spreadsheet.worksheet("LIQUIDACION")
         self.logger.info(f"Filling register for client {client}")
         start_date, end_date = self.get_load_dates_by_client(client)
         client_dispatch = None
