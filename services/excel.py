@@ -95,8 +95,9 @@ class Client:
         # Execute single batch update
         worksheet.batch_update(cell_updates)
         self.logger.info("Filled info sheet successfully")
-        self.logger.info("Clearing rows from A:17 to J:17 to A:25 J:25")
-        self.clear_sheet_range(worksheet, 18, 25, "A", "J")
+        self.logger.info("Clearing rows 18-25, columns A and D:J (preserving B:C for formulas)")
+        self.clear_sheet_range(worksheet, 18, 25, "A", "A")
+        self.clear_sheet_range(worksheet, 18, 25, "D", "J")
 
         # Prepare all dispatch data in a single batch
         batch_updates = []
