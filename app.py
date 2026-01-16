@@ -4,7 +4,6 @@ from flask import (
     flash,
     redirect,
     url_for,
-    request,
     send_file,
     session,
 )
@@ -31,12 +30,10 @@ cgan_service.login()
 
 @app.route("/", methods=["GET", "POST"])
 def home():
-    approved = False
     form = LoteForm()
     results_lote = None
     results_individuals = None
     lote = None
-    cliente = None
     if form.validate_on_submit():
         batches = cgan_service.get_batches()
         try:
@@ -56,12 +53,9 @@ def home():
             results_lote = results_lote["body"]
             results_individuals = results_individuals["body"]
             cgan_service.api_client.fill_info(results_lote)
-            clients_number = len(set(cgan_service.api_client.clients))
-
             clients = list(set(cgan_service.api_client.clients))
             print(clients)
             session["clients"] = clients
-            session["current_index"] = 0
             storage["results_lote"] = results_lote
             storage["results_individuals"] = results_individuals
             storage["lote"] = lote
@@ -115,28 +109,23 @@ def download(lote):
         return redirect(url_for("home"))
 
 
-@app.route("/approve", methods=["GET", "POST"])
+@app.route("/approve", methods=["GET"])
 def approve_client():
     clients = session.get("clients", [])
-    idx = session.get("current_index", 0)
-    if idx >= len(clients):
-        return render_template("download.html", lote=storage["lote"])
-
-    client = clients[idx]
     results_lote = storage["results_lote"]
     results_individuals = storage["results_individuals"]
-    cgan_service.api_client.fill_despacho(results_individuals, client)
-    if request.method == "POST":
 
+    # Aprobar automáticamente todos los clientes
+    for client in clients:
+        logger.info(f"Aprobando automáticamente cliente: {client}")
+        cgan_service.api_client.fill_despacho(results_individuals, client)
         cgan_service.api_client.fill_liquidacion(results_lote, client)
         cgan_service.api_client.download_sheet(client)
         cgan_service.api_client.download_sheet_pdf(client)
         cgan_service.api_client.copy_consecutivo_row(6)
         cgan_service.api_client.download_consecutivos_sheet()
-        session["current_index"] = idx + 1
 
-        return redirect(url_for("approve_client"))
-    return render_template("approve.html", client=client)
+    return render_template("download.html", lote=storage["lote"])
 
 
 @app.route("/download/consecutivos")
