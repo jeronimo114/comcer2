@@ -85,6 +85,8 @@ class Client:
             ("K10", body["customerplant"]["label"]),
             ("L10", body["customerinvoice"]["label"]),
             ("M10", body["property"]["label"]),
+            ("A12", "PEC"),
+            ("B12", body["databenefit"]["pcec"]),
         ]
 
         # Convert to batch update format
