@@ -299,7 +299,7 @@ class Client:
         # llegada L4
         # liquidacion L6
         # sacrificio L7
-        worksheet = self.spreadsheet.worksheet("LIQUIDACION")
+        worksheet = self.spreadsheet.worksheet("lIQUIDACION")
         self.logger.info(f"Filling register for client {client}")
         start_date, end_date = self.get_load_dates_by_client(client)
         client_dispatch = None
