@@ -106,11 +106,11 @@ class Client:
 
                 self.clients.append(row["namedestination"])
                 self.logger.info(row["namedestination"])
+                # Write batch to column A
+                batch_updates.append({"range": f"A{idx}", "values": [[body["batch"]]]})
+                # Write remaining data to columns D:J (skip B and C)
                 values = [
                     [
-                        body["batch"],
-                        0,
-                        0,
                         row["quantityprocessed"],
                         row["quantityvisceras"],
                         0,
@@ -120,7 +120,7 @@ class Client:
                         body["customerinvoice"]["label"],
                     ]
                 ]
-                batch_updates.append({"range": f"A{idx}:J{idx}", "values": values})
+                batch_updates.append({"range": f"D{idx}:J{idx}", "values": values})
         else:
             self.clients.append("")
 
