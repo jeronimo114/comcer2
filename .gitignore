@@ -7,6 +7,3 @@ __pycache__/
 .env
 
 downloads/
-
-credentials.json
-desktop_credentials.json
