@@ -61,6 +61,15 @@ def home():
             storage["results_individuals"] = results_individuals
             storage["lote"] = lote
 
+            # Obtener datos de decomisos
+            decomisos_data = cgan_service.get_decomisos_data(lote)
+            if decomisos_data:
+                storage["decomisos_data"] = decomisos_data
+                logger.info(f"Decomisos data obtained for lote {lote}")
+            else:
+                logger.warning(f"No se pudieron obtener datos de decomisos para lote {lote}")
+                storage["decomisos_data"] = None
+
             return redirect(url_for("loading"))
 
         else:
@@ -125,6 +134,14 @@ def process_batch():
         clients = session.get("clients", [])
         results_lote = storage["results_lote"]
         results_individuals = storage["results_individuals"]
+
+        # Escribir decomisos a Google Sheets (una sola vez, no por cliente)
+        decomisos_data = storage.get("decomisos_data")
+        if decomisos_data:
+            logger.info("Escribiendo datos de decomisos a Google Sheets")
+            cgan_service.api_client.fill_decomisos(decomisos_data)
+        else:
+            logger.warning("No hay datos de decomisos para escribir")
 
         # Aprobar automáticamente todos los clientes
         for client in clients:

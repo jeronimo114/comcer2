@@ -8,6 +8,8 @@ import shutil
 import pyexcel
 import gspread
 import gspread_dataframe
+import unicodedata
+from io import BytesIO
 from gspread.utils import ExportFormat
 from openpyxl import Workbook, load_workbook
 from openpyxl.utils import get_column_letter
@@ -554,3 +556,253 @@ class Client:
         except Exception as e:
             self.logger.error(f"Error sanitizing value '{value}': {str(e)}")
             return value
+
+    def _normalize_text(self, text: str) -> str:
+        """
+        Normaliza texto removiendo acentos y convirtiendo a minúsculas.
+        Útil para comparar headers que pueden tener acentos (Órgano vs Organo).
+        """
+        if not text:
+            return ""
+        # Normalizar usando NFD y remover diacríticos
+        normalized = unicodedata.normalize('NFD', str(text))
+        without_accents = ''.join(
+            char for char in normalized
+            if unicodedata.category(char) != 'Mn'
+        )
+        return without_accents.lower().strip()
+
+    def _parse_cantidades_sheet(self, sheet) -> list:
+        """
+        Parsea la hoja de cantidades decomisadas.
+        Maneja múltiples secciones (CALIDAD, CANALES, etc.)
+        """
+        cantidades = []
+        current_section = None
+        in_data_section = False
+
+        for row in sheet.iter_rows(values_only=True):
+            # Saltar filas completamente vacías
+            if not any(row):
+                if in_data_section:
+                    in_data_section = False
+                continue
+
+            first_cell = row[0]
+
+            if first_cell and isinstance(first_cell, str):
+                normalized = self._normalize_text(first_cell)
+
+                # Detectar header de datos
+                if normalized == "individuo":
+                    in_data_section = True
+                    continue
+
+                # Detectar nombre de sección (mayúsculas, sin más columnas significativas)
+                if first_cell.isupper() and len(first_cell) > 2:
+                    # Verificar que las otras columnas estén vacías o casi vacías
+                    other_cols = [c for c in row[1:5] if c]
+                    if len(other_cols) <= 1:
+                        current_section = first_cell.strip()
+                        in_data_section = False
+                        continue
+
+            # Procesar filas de datos
+            if in_data_section and first_cell:
+                cantidades.append({
+                    "individuo": str(row[0]) if row[0] else "",
+                    "organo": str(row[1]) if len(row) > 1 and row[1] else "",
+                    "cantidad": float(row[2]) if len(row) > 2 and row[2] else 0.0,
+                    "unidad": str(row[3]) if len(row) > 3 and row[3] else "",
+                    "fecha_registro": str(row[4]) if len(row) > 4 and row[4] else "",
+                    "seccion": current_section or "GENERAL"
+                })
+
+        return cantidades
+
+    def _parse_motivos_sheet(self, sheet) -> list:
+        """
+        Parsea la hoja de motivos de decomisos.
+        """
+        motivos = []
+        in_data_section = False
+
+        for row in sheet.iter_rows(values_only=True):
+            # Saltar filas completamente vacías
+            if not any(row):
+                if in_data_section:
+                    break  # Fin de datos
+                continue
+
+            first_cell = row[0]
+
+            # Detectar header
+            if first_cell and isinstance(first_cell, str):
+                if self._normalize_text(first_cell) == "individuo":
+                    in_data_section = True
+                    continue
+
+            # Procesar filas de datos
+            if in_data_section and first_cell:
+                # Decomiso Total puede ser "Si"/"No" o booleano
+                decomiso_total = row[3] if len(row) > 3 else False
+                if isinstance(decomiso_total, str):
+                    decomiso_total = decomiso_total.lower() in ["si", "sí", "yes", "true", "1"]
+
+                motivos.append({
+                    "individuo": str(row[0]) if row[0] else "",
+                    "organo": str(row[1]) if len(row) > 1 and row[1] else "",
+                    "patologia": str(row[2]) if len(row) > 2 and row[2] else "",
+                    "decomiso_total": bool(decomiso_total),
+                    "fecha_registro": str(row[4]) if len(row) > 4 and row[4] else ""
+                })
+
+        return motivos
+
+    def parse_decomisos_excel(self, excel_bytes: bytes) -> dict:
+        """
+        Parsea el Excel de resumen de despacho y extrae las tablas de decomisos.
+
+        Args:
+            excel_bytes: Contenido del archivo Excel en bytes
+
+        Returns:
+            dict: {"cantidades": [...], "motivos": [...]}
+        """
+        result = {
+            "cantidades": [],
+            "motivos": []
+        }
+
+        try:
+            # Cargar workbook desde bytes
+            workbook = load_workbook(BytesIO(excel_bytes), data_only=True)
+
+            self.logger.info(f"Excel sheets found: {workbook.sheetnames}")
+
+            # Parsear hoja "Cantidades decomisadas"
+            cantidades_sheet_name = None
+            for name in workbook.sheetnames:
+                if "cantidades" in self._normalize_text(name):
+                    cantidades_sheet_name = name
+                    break
+
+            if cantidades_sheet_name:
+                self.logger.info(f"Parsing sheet: {cantidades_sheet_name}")
+                sheet = workbook[cantidades_sheet_name]
+                result["cantidades"] = self._parse_cantidades_sheet(sheet)
+            else:
+                self.logger.warning("Sheet 'Cantidades decomisadas' not found")
+
+            # Parsear hoja "Motivos de decomisos"
+            motivos_sheet_name = None
+            for name in workbook.sheetnames:
+                if "motivos" in self._normalize_text(name):
+                    motivos_sheet_name = name
+                    break
+
+            if motivos_sheet_name:
+                self.logger.info(f"Parsing sheet: {motivos_sheet_name}")
+                sheet = workbook[motivos_sheet_name]
+                result["motivos"] = self._parse_motivos_sheet(sheet)
+            else:
+                self.logger.warning("Sheet 'Motivos de decomisos' not found")
+
+            self.logger.info(f"Parsed {len(result['cantidades'])} cantidades and {len(result['motivos'])} motivos")
+
+        except Exception as e:
+            self.logger.error(f"Error parsing decomisos Excel: {str(e)}")
+
+        return result
+
+    def fill_decomisos(self, decomisos_data: dict):
+        """
+        Escribe los datos de decomisos a Google Sheets en la hoja "Decomisos".
+
+        La hoja tendrá dos tablas:
+        - Tabla 1: Cantidades Decomisadas
+        - Tabla 2: Motivos de Decomisos (después de tabla 1 + 2 filas vacías)
+
+        Args:
+            decomisos_data: dict con "cantidades" y "motivos"
+        """
+        try:
+            # Acceder a la hoja "Decomisos" existente
+            worksheet = self.spreadsheet.worksheet("Decomisos")
+            self.logger.info("Accessed 'Decomisos' worksheet")
+
+            # Limpiar contenido existente
+            worksheet.clear()
+            self.logger.info("Cleared existing content in Decomisos sheet")
+
+            batch_updates = []
+            current_row = 1
+
+            # ===== Tabla 1: Cantidades Decomisadas =====
+            header_cantidades = [
+                "Individuo", "Órgano", "Cantidad", "Unidad", "Fecha Registro", "Sección"
+            ]
+            batch_updates.append({
+                "range": f"A{current_row}:F{current_row}",
+                "values": [header_cantidades]
+            })
+            current_row += 1
+
+            # Datos de cantidades
+            for item in decomisos_data.get("cantidades", []):
+                row_values = [
+                    item.get("individuo", ""),
+                    item.get("organo", ""),
+                    item.get("cantidad", 0),
+                    item.get("unidad", ""),
+                    item.get("fecha_registro", ""),
+                    item.get("seccion", "")
+                ]
+                batch_updates.append({
+                    "range": f"A{current_row}:F{current_row}",
+                    "values": [row_values]
+                })
+                current_row += 1
+
+            # Espacio entre tablas (2 filas vacías)
+            current_row += 2
+
+            # ===== Tabla 2: Motivos de Decomisos =====
+            header_motivos = [
+                "Individuo", "Órgano", "Patología", "Decomiso Total", "Fecha Registro"
+            ]
+            batch_updates.append({
+                "range": f"A{current_row}:E{current_row}",
+                "values": [header_motivos]
+            })
+            current_row += 1
+
+            # Datos de motivos
+            for item in decomisos_data.get("motivos", []):
+                row_values = [
+                    item.get("individuo", ""),
+                    item.get("organo", ""),
+                    item.get("patologia", ""),
+                    "Sí" if item.get("decomiso_total") else "No",
+                    item.get("fecha_registro", "")
+                ]
+                batch_updates.append({
+                    "range": f"A{current_row}:E{current_row}",
+                    "values": [row_values]
+                })
+                current_row += 1
+
+            # Ejecutar batch update
+            if batch_updates:
+                worksheet.batch_update(batch_updates)
+
+            cantidades_count = len(decomisos_data.get("cantidades", []))
+            motivos_count = len(decomisos_data.get("motivos", []))
+            self.logger.info(f"Filled Decomisos sheet with {cantidades_count} cantidades and {motivos_count} motivos")
+
+        except gspread.exceptions.WorksheetNotFound:
+            self.logger.error("Worksheet 'Decomisos' not found in spreadsheet")
+            raise
+        except Exception as e:
+            self.logger.error(f"Error filling Decomisos sheet: {str(e)}")
+            raise
