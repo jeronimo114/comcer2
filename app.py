@@ -6,6 +6,7 @@ from flask import (
     url_for,
     send_file,
     session,
+    jsonify,
 )
 from forms import LoteForm
 from logger_config import setup_logger
@@ -60,7 +61,7 @@ def home():
             storage["results_individuals"] = results_individuals
             storage["lote"] = lote
 
-            return redirect(url_for("approve_client"))
+            return redirect(url_for("loading"))
 
         else:
             flash("Número de lote incorrecto o no disponible.")
@@ -109,22 +110,46 @@ def download(lote):
         return redirect(url_for("home"))
 
 
-@app.route("/approve", methods=["GET"])
-def approve_client():
-    clients = session.get("clients", [])
-    results_lote = storage["results_lote"]
-    results_individuals = storage["results_individuals"]
+@app.route("/loading")
+def loading():
+    lote = storage.get("lote")
+    if not lote:
+        flash("No hay lote seleccionado.")
+        return redirect(url_for("home"))
+    return render_template("loading.html", lote=lote)
 
-    # Aprobar automáticamente todos los clientes
-    for client in clients:
-        logger.info(f"Aprobando automáticamente cliente: {client}")
-        cgan_service.api_client.fill_despacho(results_individuals, client)
-        cgan_service.api_client.fill_liquidacion(results_lote, client)
-        cgan_service.api_client.download_sheet(client)
-        cgan_service.api_client.download_sheet_pdf(client)
-        cgan_service.api_client.copy_consecutivo_row(6)
-        cgan_service.api_client.download_consecutivos_sheet()
 
+@app.route("/process", methods=["GET"])
+def process_batch():
+    try:
+        clients = session.get("clients", [])
+        results_lote = storage["results_lote"]
+        results_individuals = storage["results_individuals"]
+
+        # Aprobar automáticamente todos los clientes
+        for client in clients:
+            logger.info(f"Aprobando automáticamente cliente: {client}")
+            cgan_service.api_client.fill_despacho(results_individuals, client)
+            cgan_service.api_client.fill_liquidacion(results_lote, client)
+            cgan_service.api_client.download_sheet(client)
+            cgan_service.api_client.download_sheet_pdf(client)
+            cgan_service.api_client.copy_consecutivo_row(6)
+            cgan_service.api_client.download_consecutivos_sheet()
+
+        return jsonify({
+            "success": True,
+            "redirect": url_for("download_page")
+        })
+    except Exception as e:
+        logger.error(f"Error processing batch: {str(e)}")
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        })
+
+
+@app.route("/complete")
+def download_page():
     return render_template("download.html", lote=storage["lote"])
 
 
