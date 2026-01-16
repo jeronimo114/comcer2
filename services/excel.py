@@ -29,7 +29,7 @@ class Client:
         self.benefit_day = None
         self.logger = setup_logger()
         self.batch: str = None
-        self.path = "./downloads/base.xlsx"
+        self.path = "./assets/base.xlsx"
         self.workbook = load_workbook(self.path)
         self.clients = []
         self.creds = ServiceAccountCredentials.from_json_keyfile_name(
