@@ -17,7 +17,6 @@ from logger_config import setup_logger
 from oauth2client.service_account import ServiceAccountCredentials
 from pathlib import Path
 from typing import List, Tuple, Union
-from utils import extract_pdf_pages, excel_to_pdf
 from services.drive import upload_files
 
 
@@ -453,10 +452,11 @@ class Client:
         try:
             self.logger.info(f"Downloading sheet as PDF")
 
-            # Get the specific sheet or use the first one
-
-            # Get the worksheet as PDF bytes
-            spreadsheet_data = self.spreadsheet.export(format=ExportFormat.PDF)
+            worksheet = self.spreadsheet.worksheet("lIQUIDACIONES")
+            spreadsheet_data = self.spreadsheet.export(
+                format=ExportFormat.PDF,
+                gid=worksheet.id,
+            )
 
             # Create downloads directory if it doesn't exist
             download_dir = "downloads/" + self.batch
@@ -473,7 +473,6 @@ class Client:
             with open(filepath, "wb") as f:
                 f.write(spreadsheet_data)
 
-            extract_pdf_pages(filepath, download_dir + "/" + filename, [3])
             self.logger.info(f"PDF spreadsheet saved to {filepath}")
             return filepath
 
