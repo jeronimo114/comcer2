@@ -9,6 +9,8 @@ import pyexcel
 import gspread
 import gspread_dataframe
 import unicodedata
+import httplib2
+import urllib.parse
 from io import BytesIO
 from gspread.utils import ExportFormat
 from openpyxl import Workbook, load_workbook
@@ -353,6 +355,18 @@ class Client:
             f"Worksheet not found. Tried: {preferred_titles}. Available: {available_titles}"
         )
 
+    def export_worksheet_pdf(self, worksheet) -> bytes:
+        export_url = f"https://docs.google.com/spreadsheets/d/{self.spreadsheet.id}/export"
+        params = {"format": "pdf", "gid": worksheet.id}
+        url = f"{export_url}?{urllib.parse.urlencode(params)}"
+        http = self.creds.authorize(httplib2.Http())
+        response, content = http.request(url, "GET")
+        if int(response.status) != 200:
+            raise RuntimeError(
+                f"Spreadsheet PDF export failed with status {response.status}"
+            )
+        return content
+
     def download_sheet(self, client) -> str:
         """Download the spreadsheet as Excel file"""
         try:
@@ -483,10 +497,7 @@ class Client:
                 ["lIQUIDACIONES", "LIQUIDACIONES", "lIQUIDACION", "LIQUIDACION"]
             )
             self.logger.info(f"Exporting PDF for worksheet: {worksheet.title}")
-            spreadsheet_data = self.spreadsheet.export(
-                format=ExportFormat.PDF,
-                gid=worksheet.id,
-            )
+            spreadsheet_data = self.export_worksheet_pdf(worksheet)
 
             # Create downloads directory if it doesn't exist
             download_dir = "downloads/" + self.batch
