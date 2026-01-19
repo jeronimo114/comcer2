@@ -326,6 +326,33 @@ class Client:
         # Store benefit day for later use
         self.benefit_day = body["databenefit"]["datebenefit"]
 
+    def get_worksheet_by_titles(self, preferred_titles: List[str]):
+        def normalize_title(title: str) -> str:
+            return (
+                unicodedata.normalize("NFKD", title)
+                .encode("ascii", "ignore")
+                .decode("ascii")
+                .strip()
+                .casefold()
+            )
+
+        normalized_targets = [normalize_title(title) for title in preferred_titles]
+        worksheets = self.spreadsheet.worksheets()
+        worksheet_map = {
+            normalize_title(worksheet.title): worksheet
+            for worksheet in worksheets
+        }
+
+        for target in normalized_targets:
+            worksheet = worksheet_map.get(target)
+            if worksheet:
+                return worksheet
+
+        available_titles = [worksheet.title for worksheet in worksheets]
+        raise gspread.exceptions.WorksheetNotFound(
+            f"Worksheet not found. Tried: {preferred_titles}. Available: {available_titles}"
+        )
+
     def download_sheet(self, client) -> str:
         """Download the spreadsheet as Excel file"""
         try:
@@ -452,7 +479,10 @@ class Client:
         try:
             self.logger.info(f"Downloading sheet as PDF")
 
-            worksheet = self.spreadsheet.worksheet("lIQUIDACIONES")
+            worksheet = self.get_worksheet_by_titles(
+                ["lIQUIDACIONES", "LIQUIDACIONES", "lIQUIDACION", "LIQUIDACION"]
+            )
+            self.logger.info(f"Exporting PDF for worksheet: {worksheet.title}")
             spreadsheet_data = self.spreadsheet.export(
                 format=ExportFormat.PDF,
                 gid=worksheet.id,
