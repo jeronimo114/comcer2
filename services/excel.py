@@ -1,6 +1,7 @@
 import pandas as pd
 import os
 import time
+import functools
 import datetime
 import pypdf
 import pandas
@@ -20,6 +21,30 @@ from oauth2client.service_account import ServiceAccountCredentials
 from pathlib import Path
 from typing import List, Tuple, Union
 from services.drive import upload_files
+
+
+def retry_on_quota(max_retries=5, base_delay=2):
+    """Retry a Sheets API call with exponential backoff on HTTP 429 (quota)."""
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(self, *args, **kwargs):
+            delay = base_delay
+            for attempt in range(max_retries):
+                try:
+                    return func(self, *args, **kwargs)
+                except gspread.exceptions.APIError as exc:
+                    status = getattr(getattr(exc, "response", None), "status_code", None)
+                    if status == 429 and attempt < max_retries - 1:
+                        self.logger.warning(
+                            f"Sheets quota hit (429); retrying in {delay}s "
+                            f"(attempt {attempt + 1}/{max_retries})"
+                        )
+                        time.sleep(delay)
+                        delay *= 2
+                        continue
+                    raise
+        return wrapper
+    return decorator
 
 
 class Client:
@@ -43,7 +68,27 @@ class Client:
         self.spreadsheet = self.sheets_api_client.open_by_key(
             "18AMyp1SzQR_3xe7EAH5muotOkNMy7rJV73YVwfExbi8"
         )
+        self._ws_cache = None
+        self._consec_spreadsheet = None
         self.consecutivos = []
+
+    def _load_worksheets(self):
+        if self._ws_cache is None:
+            self._ws_cache = {ws.title: ws for ws in self.spreadsheet.worksheets()}
+        return self._ws_cache
+
+    def _get_ws(self, title):
+        cache = self._load_worksheets()
+        if title not in cache:
+            cache[title] = self.spreadsheet.worksheet(title)
+        return cache[title]
+
+    def _get_consec_spreadsheet(self):
+        if self._consec_spreadsheet is None:
+            self._consec_spreadsheet = self.sheets_api_client.open_by_key(
+                "12RXnw6ZBzgG4Yn0EvUZbgf2esJ-fFDdL-uEvcTpuS8w"
+            )
+        return self._consec_spreadsheet
 
     def clear_sheet_range(
         self,
@@ -56,9 +101,10 @@ class Client:
         range_to_clear = f"{start_col}{start_row}:{end_col}{end_row}"
         worksheet.batch_clear([range_to_clear])
 
+    @retry_on_quota()
     def fill_info(self, body: dict):
         self.clients = []
-        worksheet = self.spreadsheet.worksheet("INFO")
+        worksheet = self._get_ws("INFO")
         self.batch = body["batch"]
 
         # Prepare all values in a single update
@@ -163,8 +209,9 @@ class Client:
 
             self.fill_sheet(client, path)
 
+    @retry_on_quota()
     def fill_despacho(self, body: list, client):
-        worksheet = self.spreadsheet.worksheet("despacho")
+        worksheet = self._get_ws("despacho")
         self.logger.info("Clearing despacho sheet")
         self.clear_sheet_range(worksheet, 2, 90, "A", "R")
 
@@ -298,11 +345,12 @@ class Client:
             self.logger.error(f"Error getting load dates: {str(e)}")
             return ("?", "?")
 
+    @retry_on_quota()
     def fill_liquidacion(self, body: list, client):
         # llegada L4
         # liquidacion L6
         # sacrificio L7
-        worksheet = self.spreadsheet.worksheet("lIQUIDACION")
+        worksheet = self._get_ws("lIQUIDACION")
         self.logger.info(f"Filling register for client {client}")
         start_date, end_date = self.get_load_dates_by_client(client)
         client_dispatch = None
@@ -339,18 +387,15 @@ class Client:
             )
 
         normalized_targets = [normalize_title(title) for title in preferred_titles]
-        worksheets = self.spreadsheet.worksheets()
+        cache = self._load_worksheets()
         worksheet_map = {
-            normalize_title(worksheet.title): worksheet
-            for worksheet in worksheets
+            normalize_title(title): worksheet for title, worksheet in cache.items()
         }
-
         for target in normalized_targets:
             worksheet = worksheet_map.get(target)
             if worksheet:
                 return worksheet
-
-        available_titles = [worksheet.title for worksheet in worksheets]
+        available_titles = list(cache.keys())
         raise gspread.exceptions.WorksheetNotFound(
             f"Worksheet not found. Tried: {preferred_titles}. Available: {available_titles}"
         )
@@ -367,6 +412,7 @@ class Client:
             )
         return content
 
+    @retry_on_quota()
     def download_sheet(self, client) -> str:
         """Download the spreadsheet as Excel file"""
         try:
@@ -404,6 +450,7 @@ class Client:
             self.logger.error(f"Error downloading spreadsheet: {str(e)}")
             raise
 
+    @retry_on_quota()
     def download_consecutivos_sheet(self):
         try:
 
@@ -412,9 +459,7 @@ class Client:
                 os.makedirs(download_dir)
 
             # Connect to destination spreadsheet
-            dest_spreadsheet = self.sheets_api_client.open_by_key(
-                "12RXnw6ZBzgG4Yn0EvUZbgf2esJ-fFDdL-uEvcTpuS8w"  # Replace with your actual spreadsheet key
-            )
+            dest_spreadsheet = self._get_consec_spreadsheet()
 
             spreadsheet_data = dest_spreadsheet.export(format=ExportFormat.EXCEL)
 
@@ -432,6 +477,7 @@ class Client:
             self.logger.error(f"Error downloading spreadsheet: {str(e)}")
             raise
 
+    @retry_on_quota()
     def copy_consecutivo_row(self, row_number: int):
         """
         Copy a specific row from 'Consec' sheet and upload it to another Google Sheet
@@ -441,7 +487,7 @@ class Client:
         """
         try:
             # Get source worksheet
-            source_worksheet = self.spreadsheet.worksheet("Consec")
+            source_worksheet = self._get_ws("Consec")
 
             # Get the values from the specified row
             row_values = source_worksheet.row_values(row_number)
@@ -451,9 +497,7 @@ class Client:
                 return
 
             # Connect to destination spreadsheet
-            dest_spreadsheet = self.sheets_api_client.open_by_key(
-                "12RXnw6ZBzgG4Yn0EvUZbgf2esJ-fFDdL-uEvcTpuS8w"
-            )
+            dest_spreadsheet = self._get_consec_spreadsheet()
             dest_worksheet = dest_spreadsheet.sheet1
 
             # Get current values to find last row
@@ -488,6 +532,7 @@ class Client:
             self.logger.error(f"Error formatting benefit day: {str(e)}")
             return date_str
 
+    @retry_on_quota()
     def download_sheet_pdf(self, client) -> str:
         """Download a specific sheet as PDF file"""
         try:
@@ -755,6 +800,7 @@ class Client:
 
         return result
 
+    @retry_on_quota()
     def fill_decomisos(self, decomisos_data: dict):
         """
         Escribe los datos de decomisos a Google Sheets en la hoja "Decomisos".
@@ -768,7 +814,7 @@ class Client:
         """
         try:
             # Acceder a la hoja "Decomisos" existente
-            worksheet = self.spreadsheet.worksheet("Decomisos")
+            worksheet = self._get_ws("Decomisos")
             self.logger.info("Accessed 'Decomisos' worksheet")
 
             # Limpiar contenido existente
@@ -846,3 +892,14 @@ class Client:
         except Exception as e:
             self.logger.error(f"Error filling Decomisos sheet: {str(e)}")
             raise
+
+    def process_clients(self, clients, results_lote, results_individuals):
+        for client in clients:
+            self.logger.info(f"Aprobando automáticamente cliente: {client}")
+            self.fill_despacho(results_individuals, client)
+            self.fill_liquidacion(results_lote, client)
+            self.download_sheet(client)
+            self.download_sheet_pdf(client)
+        # Client-invariant operations: run once per batch, not once per client.
+        self.copy_consecutivo_row(6)
+        self.download_consecutivos_sheet()

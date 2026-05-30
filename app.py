@@ -144,14 +144,9 @@ def process_batch():
             logger.warning("No hay datos de decomisos para escribir")
 
         # Aprobar automáticamente todos los clientes
-        for client in clients:
-            logger.info(f"Aprobando automáticamente cliente: {client}")
-            cgan_service.api_client.fill_despacho(results_individuals, client)
-            cgan_service.api_client.fill_liquidacion(results_lote, client)
-            cgan_service.api_client.download_sheet(client)
-            cgan_service.api_client.download_sheet_pdf(client)
-            cgan_service.api_client.copy_consecutivo_row(6)
-            cgan_service.api_client.download_consecutivos_sheet()
+        cgan_service.api_client.process_clients(
+            clients, results_lote, results_individuals
+        )
 
         return jsonify({
             "success": True,
