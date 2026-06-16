@@ -22,6 +22,7 @@ def make_counter():
         "worksheet_calls": 0,  # spreadsheet.worksheet(title)
         "worksheets_calls": 0,  # spreadsheet.worksheets()
         "open_by_key_calls": 0,
+        "consec_rows": 0,      # rows appended to the consecutivos planilla
     }
 
 
@@ -49,6 +50,11 @@ class FakeWorksheet:
         return [["h1", "h2"]]
 
     def insert_row(self, *a, **k):
+        self._counter["consec_rows"] += 1
+        return None
+
+    def insert_rows(self, values, *a, **k):
+        self._counter["consec_rows"] += len(values)
         return None
 
 
@@ -160,13 +166,24 @@ def run_processing(n):
     return counter
 
 
-def test_sheets_reads_do_not_scale_with_client_count():
-    small = run_processing(3)
-    big = run_processing(30)
-    assert big["reads"] == small["reads"], (
-        "Sheets read requests scale with client count "
-        f"(3 clients -> {small['reads']} reads, 30 clients -> {big['reads']} reads). "
-        "This is what triggers the 429 'Read requests per minute' quota error."
+def test_sheets_reads_scale_at_most_one_per_dispatch():
+    """The 429 fix removed the *duplicated* per-client reads (worksheet metadata
+    refetch, re-opening the consecutivos spreadsheet, re-scanning the
+    destination on every iteration).
+
+    The only read that legitimately scales with client count is the single
+    'Consec' row capture per dispatch (the sheet recalculates per client, so its
+    data genuinely differs). Reads must therefore grow by at most one per
+    additional client, not by a multiple.
+    """
+    small_n, big_n = 3, 30
+    small = run_processing(small_n)
+    big = run_processing(big_n)
+    extra_reads = big["reads"] - small["reads"]
+    assert extra_reads <= (big_n - small_n), (
+        f"Sheets reads grew by {extra_reads} going from {small_n} to {big_n} "
+        f"clients (>{big_n - small_n}); duplicated per-client reads have returned "
+        "and will retrigger the 429 'Read requests per minute' quota error."
     )
 
 
@@ -177,6 +194,23 @@ def test_consecutivos_destination_opened_once_per_batch():
         f"{counter['open_by_key_calls']} times for 20 clients; "
         "it is client-invariant and should be opened once per batch."
     )
+
+
+def test_consecutivos_capture_every_dispatch():
+    """Regression: the consecutivos planilla must capture every dispatch in the
+    batch.
+
+    The 'Consec' sheet recalculates for each client's dispatch, so its row must
+    be copied once per client. A batch with N dispatches (lotes routinely have
+    3-6) must produce N rows in the consecutivos planilla, not just one.
+    """
+    for n in (1, 3, 6):
+        counter = run_processing(n)
+        assert counter["consec_rows"] == n, (
+            f"Consecutivos planilla captured {counter['consec_rows']} dispatch "
+            f"rows for a batch of {n} clients; it must capture one row per "
+            "dispatch."
+        )
 
 
 def test_worksheet_metadata_fetched_once_per_batch():

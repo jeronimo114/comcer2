@@ -478,15 +478,20 @@ class Client:
             raise
 
     @retry_on_quota()
-    def copy_consecutivo_row(self, row_number: int):
+    def capture_consecutivo_row(self, row_number: int):
         """
-        Copy a specific row from 'Consec' sheet and upload it to another Google Sheet
+        Read one row from the 'Consec' sheet and buffer it in memory.
+
+        The 'Consec' sheet recalculates its formulas from the despacho data of
+        the client currently loaded, so this must be called once per client
+        (per dispatch). Buffering the rows lets us append them all in a single
+        write at the end of the batch (see ``flush_consecutivo_rows``).
 
         Args:
-            row_number: The row number to copy from the Consec sheet
+            row_number: The row number to read from the Consec sheet
         """
         try:
-            # Get source worksheet
+            # Get source worksheet (cached handle)
             source_worksheet = self._get_ws("Consec")
 
             # Get the values from the specified row
@@ -496,7 +501,34 @@ class Client:
                 self.logger.warning(f"Row {row_number} is empty, skipping")
                 return
 
-            # Connect to destination spreadsheet
+            # Sanitize and buffer the row for this dispatch
+            row_values = [self.sanitize_value(value) for value in row_values]
+            self.consecutivos.append(row_values)
+            self.logger.info(f"Captured consecutivo row: {row_values}")
+
+        except gspread.exceptions.APIError as e:
+            self.logger.error(f"Google Sheets API error: {str(e)}")
+            raise
+        except Exception as e:
+            self.logger.error(f"Error capturing consecutivo row: {str(e)}")
+            raise
+
+    @retry_on_quota()
+    def flush_consecutivo_rows(self):
+        """
+        Append every buffered consecutivo row to the destination spreadsheet.
+
+        Runs once per batch: a single read to locate the next free row and a
+        single write for all dispatches, so the consecutivos planilla captures
+        every dispatch (lotes routinely have 3-6) without re-scanning the
+        destination on every client.
+        """
+        try:
+            if not self.consecutivos:
+                self.logger.warning("No consecutivo rows to flush")
+                return
+
+            # Connect to destination spreadsheet (cached handle)
             dest_spreadsheet = self._get_consec_spreadsheet()
             dest_worksheet = dest_spreadsheet.sheet1
 
@@ -504,21 +536,22 @@ class Client:
             existing_values = dest_worksheet.get_all_values()
             next_row = len(existing_values) + 1
 
-            # Sanitize values
-            row_values = [self.sanitize_value(value) for value in row_values]
-
-            # Append the row to the next available row
-            dest_worksheet.insert_row(
-                row_values, next_row, value_input_option="USER_ENTERED"
+            # Append all captured rows in a single batch
+            dest_worksheet.insert_rows(
+                self.consecutivos, next_row, value_input_option="USER_ENTERED"
             )
 
-            self.logger.info(f"Appended row to position {next_row}: {row_values}")
+            self.logger.info(
+                f"Appended {len(self.consecutivos)} consecutivo rows at "
+                f"position {next_row}"
+            )
+            self.consecutivos = []
 
         except gspread.exceptions.APIError as e:
             self.logger.error(f"Google Sheets API error: {str(e)}")
             raise
         except Exception as e:
-            self.logger.error(f"Error copying consecutivo row: {str(e)}")
+            self.logger.error(f"Error flushing consecutivo rows: {str(e)}")
             raise
 
     def format_benefit_day(self, date_str: str) -> str:
@@ -900,6 +933,9 @@ class Client:
             self.fill_liquidacion(results_lote, client)
             self.download_sheet(client)
             self.download_sheet_pdf(client)
+            # The 'Consec' sheet recalculates per client, so capture its row
+            # once per dispatch (lotes have 3-6) to cover every dispatch.
+            self.capture_consecutivo_row(6)
         # Client-invariant operations: run once per batch, not once per client.
-        self.copy_consecutivo_row(6)
+        self.flush_consecutivo_rows()
         self.download_consecutivos_sheet()
